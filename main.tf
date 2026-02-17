@@ -31,7 +31,7 @@ provider "openstack" {
 
 # --- Appel du Module Réseau ---
 module "vlan_infra" {
-  source = "./modules/network"
+  source = "git::https://github.com/ansforge/terraform-ovh-network.git//modules/network?ref=amont"
 
   service_name = var.service_name
   region       = var.region
