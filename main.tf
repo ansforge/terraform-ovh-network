@@ -15,20 +15,21 @@ terraform {
 
 # Providers
 provider "ovh" {
-  endpoint            = "ovh-eu"
-  application_key     = var.ovh_application_key
-  application_secret  = var.ovh_application_secret
-  consumer_key        = var.ovh_consumer_key
+  endpoint = "ovh-eu"
+  # Le provider OVH utilise automatiquement les variables d'environnement :
+  # OVH_APPLICATION_KEY, OVH_APPLICATION_SECRET, OVH_CONSUMER_KEY
 }
 
 provider "openstack" {
-  auth_url                        = var.os_auth_url
-  application_credential_id       = var.os_user
-  application_credential_secret   = var.os_password
-  region                          = var.region
+  # Les variables de credentials OpenStack sont passées via le tfvars
+  # ou via des variables d'environnement spécifiques au provider (OS_...)
+  auth_url                      = var.os_auth_url
+  application_credential_id     = var.os_user
+  application_credential_secret = var.os_password
+  region                        = var.region
 }
 
-# --- MODIFICATION ICI : La source pointe vers le dossier local ---
+# --- Appel du Module Réseau ---
 module "vlan_infra" {
   source = "./modules/network"
 

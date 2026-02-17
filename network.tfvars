@@ -1,7 +1,3 @@
-# --- Credentials (requis pour OVH/OpenStack) ---
-ovh_application_key    = "5322855a312548738bfcc487c3a17cdd"
-ovh_application_secret = "quOw_e1ov11pyQrNbV_w-zAcA42zOq854kQac0I5Ct1DcvPhkeTh2aazqh8GJh8YHRzVeySXSMyb7IuImBaOXw"
-ovh_consumer_key = "a39bfeff7524d6c8b985f063323d39a7"
 # --- OpenStack Auth ---
 os_auth_url = "https://auth.cloud.ovh.net/v3/"
 os_user     = "5322855a312548738bfcc487c3a17cdd"
@@ -24,16 +20,17 @@ vlans = {
     no_gateway = true
   }
 
-  interco_fw = {
+interco_fw = {
     vlan_id    = 1021
-    name       = "fw-amont-interco-172.16.21.0/24"
+    # CORRECTION ICI : Nom aligné sur l'API OVH (tiret au lieu de slash)
+    name       = "fw-amont-interco-172.16.21.0-24" 
     cidr       = "172.16.21.0/24"
     start      = "172.16.21.10"
     end        = "172.16.21.254"
     region     = "SBG5"
     dhcp       = false
     no_gateway = true
-  }
+    }
 
   ip_front = {
     vlan_id    = 1031

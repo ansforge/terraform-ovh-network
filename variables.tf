@@ -1,3 +1,5 @@
+# --- terraform-ovh-network/variables.tf ---
+
 variable "service_name" {
   type        = string
   description = "ID du projet OVHcloud"
@@ -22,27 +24,18 @@ variable "vlans" {
   }))
 }
 
-# --- Credentials ---
-variable "ovh_application_key" {
-  type = string
-}
-
-variable "ovh_application_secret" {
-  type = string
-}
-
-variable "ovh_consumer_key" {
-  type = string
-}
-
+# --- Credentials OpenStack (utilisés dans main.tf) ---
 variable "os_auth_url" {
-  type = string
+  type        = string
+  description = "URL d'authentification OpenStack"
 }
 
 variable "os_user" {
-  type = string
+  type        = string
+  description = "Utilisateur OpenStack"
 }
 
 variable "os_password" {
-  type = string
+  type        = string
+  description = "Mot de passe OpenStack"
 }
