@@ -13,16 +13,11 @@ terraform {
   }
 }
 
-# Providers
 provider "ovh" {
   endpoint = "ovh-eu"
-  # Le provider OVH utilise automatiquement les variables d'environnement :
-  # OVH_APPLICATION_KEY, OVH_APPLICATION_SECRET, OVH_CONSUMER_KEY
 }
 
 provider "openstack" {
-  # Les variables de credentials OpenStack sont passées via le tfvars
-  # ou via des variables d'environnement spécifiques au provider (OS_...)
   auth_url                      = var.os_auth_url
   application_credential_id     = var.os_user
   application_credential_secret = var.os_password

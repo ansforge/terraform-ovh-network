@@ -17,7 +17,7 @@ vlans = {
     end        = "172.16.11.254"
     region     = "SBG5"
     dhcp       = false
-    no_gateway = true
+    no_gateway = false
   }
 
 interco_fw = {
@@ -42,17 +42,6 @@ interco_fw = {
     dhcp       = false
     no_gateway = true
   }
-
- # gateway = {
- #   vlan_id    = 123
- #   name       = "Gateway"
- #   cidr       = "192.168.5.0/28"
-  #  start      = "192.168.5.2"
-  #  end        = "192.168.5.14"
-  #  region     = "SBG5"
-  #  dhcp       = false
-   # no_gateway = false
- # }
 
   vlan_tech = {
     vlan_id    = 1041
