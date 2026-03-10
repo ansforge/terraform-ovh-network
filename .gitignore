@@ -1,2 +1,7 @@
 .terraform/
-*.tfstate*
+*.tfstate
+*.tfstate.*
+*.backup
+*.tfvars
+.terraform.lock.hcl
+openrc.sh

@@ -1,23 +1,19 @@
 variable "service_name" {
-  type        = string
-  description = "ID du projet OVHcloud"
+  type = string
 }
 
 variable "region" {
-  type        = string
-  description = "Région OVHcloud"
+  type = string
 }
 
 variable "vlans" {
-  description = "Map des VLANs à créer"
   type = map(object({
-    vlan_id    = number
     name       = string
+    vlan_id    = number
     cidr       = string
     start      = string
     end        = string
-    region     = string
-    dhcp       = optional(bool, true)
-    no_gateway = optional(bool, false)
+    dhcp       = bool
+    no_gateway = bool
   }))
 }
