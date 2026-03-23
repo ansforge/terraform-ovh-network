@@ -2,6 +2,6 @@
 *.tfstate
 *.tfstate.*
 *.backup
-*.tfvars
+#*.tfvars
 .terraform.lock.hcl
 openrc.sh
