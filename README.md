@@ -68,4 +68,6 @@ Chaque VLAN est configuré via **OpenStack** avec :
 ### ▶️ Initialisation
 
 ```bash
-terraform init -backend-config=backend.tf
+terraform plan "network.tfvars"
+terraform apply "network.tfvars"
+
