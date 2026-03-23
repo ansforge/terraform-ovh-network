@@ -34,7 +34,7 @@ provider "ovh" {
 
 provider "openstack" {
   auth_url                      = local.os_creds["OS_AUTH_URL"]
-  application_credential_id     = local.os_creds["OS_APPLICATION_CREDENTIAL_ID"]
+  application_credential_id      = local.os_creds["OS_APPLICATION_CREDENTIAL_ID"]
   application_credential_secret = local.os_creds["OS_APPLICATION_CREDENTIAL_SECRET"]
   region                        = var.region
 }
@@ -44,16 +44,4 @@ module "network" {
   service_name = var.service_name
   region       = var.region
   vlans        = var.vlans
-}
-
-# Gateway Internet rattachée au front (VLAN 100)
-resource "ovh_cloud_project_gateway" "internet" {
-  service_name = var.service_name
-  name         = "Internet"
-  region       = var.region
-  model        = "s"
-
-  # Utiliser l'UUID OpenStack pour le subnet
-  network_id = module.network.network_uuids["fwfe_front"]
-  subnet_id  = module.network.subnet_ids["fwfe_front"]
 }
