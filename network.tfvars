@@ -2,7 +2,7 @@ service_name = "2b264defd5244f52b8edbd6c9239a325"
 region       = "RBX-A"
 
 vlans = {
-  "fwfe_front"   = { vlan_id = null, name = "prod-production-fwfe-front-10.11.0.0-24", cidr = "10.11.0.0/24", start = "10.11.0.51", end = "10.11.0.100" }
+#  "fwfe_front"   = { vlan_id = 100, name = "prod-production-fwfe-front-10.11.0.0-24", cidr = "10.11.0.0/24", start = "10.11.0.51", end = "10.11.0.100" }
   "vrack_vpn"    = { vlan_id = 110, name = "prod-production-vrack-vpn-10.11.10.0-24", cidr = "10.11.10.0/24", start = "10.11.10.51", end = "10.11.10.100" }
   "fwfe_admin"   = { vlan_id = 120, name = "prod-production-fwfe-admin-10.11.20.0-24", cidr = "10.11.20.0/24", start = "10.11.20.51", end = "10.11.20.100" }
   "fwfe_ha"      = { vlan_id = 121, name = "prod-production-fwfe-ha-172.16.21.32-28",  cidr = "172.16.21.32/28", start = "172.16.21.43", end = "172.16.21.46" }
@@ -29,12 +29,10 @@ vlans = {
     cidr        = "10.11.70.0/24"
     start       = "10.11.70.51"
     end         = "10.11.70.100"
-    enable_dhcp = true
-    gateway_ip  = "10.11.70.254"
+    enable_dhcp = false
   }
 
-  "fwbe_occ"     = { vlan_id =  0, name = "prod-production-fwbe-occ-172.16.21.0-28", cidr = "172.16.21.0/28", start = "172.16.21.10", end = "172.16.21.14" }
-
+  "fw_front"     = { vlan_id =  0, name = "prod-production-fw-front-5.135.49.0-25", cidr = "5.135.49.0/25", start = "5.135.49.1", end = "5.135.49.126" }
   "app_front"    = { vlan_id = 300, name = "prod-production-app-front-10.13.0.0-24", cidr = "10.13.0.0/24", start = "10.13.0.51", end = "10.13.0.100" }
   "app_middle"   = { vlan_id = 301, name = "prod-production-app-middle-10.13.1.0-24", cidr = "10.13.1.0/24", start = "10.13.1.51", end = "10.13.1.100" }
   "app_back"     = { vlan_id = 302, name = "prod-production-app-back-10.13.2.0-24", cidr = "10.13.2.0/24", start = "10.13.2.51", end = "10.13.2.100" }
@@ -55,7 +53,6 @@ vlans = {
     cidr        = "10.11.30.0/24"
     start       = "10.11.30.51"
     end         = "10.11.30.100"
-    enable_dhcp = true
-    gateway_ip  = "10.11.30.251"
+    enable_dhcp = false
   }
 }
