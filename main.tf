@@ -11,12 +11,12 @@ provider "vault" {
 }
 
 ephemeral "vault_kv_secret_v2" "ovh" {
-  mount = "iacrunner-prod"
+  mount = "iacrunner-amont"
   name  = "ovh_key"
 }
 
 ephemeral "vault_kv_secret_v2" "os" {
-  mount = "iacrunner-prod"
+  mount = "iacrunner-amont"
   name  = "openstack_key"
 }
 

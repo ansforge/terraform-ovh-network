@@ -1,10 +1,10 @@
 terraform {
   backend "s3" {
-    bucket   = "infra-prod-sto-object-tf01"
-    key      = "infra-production-network.tfstate"
-    region   = "rbx"
+    bucket   = "infra-amont-sto-object-tf01"
+    key      = "infra-amont-network.tfstate"
+    region   = "sbg"
     endpoints = { 
-      s3 = "https://s3.rbx.io.cloud.ovh.net/" 
+      s3 = "https://s3.sbg.io.cloud.ovh.net/" 
     }
     skip_credentials_validation = true
     skip_region_validation      = true
