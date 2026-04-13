@@ -53,6 +53,8 @@ vlans = {
     cidr        = "10.11.30.0/24"
     start       = "10.11.30.51"
     end         = "10.11.30.100"
-    enable_dhcp = false
+    enable_dhcp = true
+    gateway_ip  = "10.11.30.251"
+
   }
 }
