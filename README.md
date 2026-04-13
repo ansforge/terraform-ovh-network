@@ -1,57 +1,72 @@
-# 🌐 terraform-ovh-network
+# 🛡️ terraform-ovh-security
 
-**Gestion de l'infrastructure réseau OVH Cloud (VLANs, subnets, vRack) via Terraform — ANS Forge**
+**Déploiement des firewalls Stormshield sur OVH Cloud via Terraform — ANS Forge**
 
-Ce dépôt Terraform provisionne et gère l'ensemble des réseaux privés (VLANs vRack) et sous-réseaux (subnets OpenStack) sur OVH Public Cloud. Il utilise une approche déclarative basée sur une map de VLANs avec gestion dynamique du DHCP et des gateways.
+Ce dépôt Terraform provisionne et gère les instances de firewalls **Stormshield** (appliance virtuelle) sur OVH Public Cloud / OpenStack. Il gère la création dynamique des clés SSH, des ports réseau multi-interfaces, et des instances avec attachement automatique aux VLANs vRack.
 
 ---
 
 ## 📑 Table des matières
 
-- [Architecture réseau](#-architecture-réseau)
+- [Architecture](#-architecture)
 - [Prérequis](#-prérequis)
 - [Arborescence du projet](#-arborescence-du-projet)
 - [Branches et environnements](#-branches-et-environnements)
 - [Providers utilisés](#-providers-utilisés)
-- [Module network](#-module-network)
+- [Module security](#-module-security)
 - [Variables](#-variables)
-- [Plan d'adressage](#-plan-dadressage)
+- [Inventaire des firewalls](#-inventaire-des-firewalls)
 - [Backend S3 (state distant)](#-backend-s3-state-distant)
 - [Commandes de lancement](#-commandes-de-lancement)
 - [Commandes de test et vérification](#-commandes-de-test-et-vérification)
 - [Gestion des secrets (Vault)](#-gestion-des-secrets-vault)
-- [Ajouter / modifier un VLAN](#-ajouter--modifier-un-vlan)
+- [Ajouter / modifier un firewall](#-ajouter--modifier-un-firewall)
+- [Récupérer la clé SSH d'un firewall](#-récupérer-la-clé-ssh-dun-firewall)
 - [Dépannage](#-dépannage)
 - [Contribution](#-contribution)
 
 ---
 
-## 🏗️ Architecture réseau
+## 🏗️ Architecture
 
 ```
-                         ┌───────────────────────┐
-                         │    OVH vRack           │
-                         │  (Réseau privé L2)     │
-                         └──────────┬────────────┘
-                                    │
-           ┌────────────────────────┼────────────────────────┐
-           │                        │                        │
-    ┌──────▼──────┐          ┌──────▼──────┐          ┌──────▼──────┐
-    │  VLAN 0     │          │  VLAN 1xx   │          │  VLAN 3xx   │
-    │  fw_front   │          │  Infra/DMZ  │          │  Applicatif │
-    │  (Public)   │          │  (Privé)    │          │  (Privé)    │
-    └─────────────┘          └─────────────┘          └─────────────┘
-
-    ┌──────────────────────────────────────────────────────────────┐
-    │                    Terraform (ce repo)                        │
-    │                                                              │
-    │  main.tf ──► module "network"                                │
-    │               ├── ovh_cloud_project_network_private (VLANs)  │
-    │               └── openstack_networking_subnet_v2 (Subnets)   │
-    │                                                              │
-    │  Secrets : Vault (ephemeral kv_secret_v2)                    │
-    │  State   : S3 OVH (backend distant)                          │
-    └──────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                        HashiCorp Vault                               │
+│  ┌──────────────────────────────────────────────────────────────┐   │
+│  │ iacrunner-*/openstack_key                                    │   │
+│  │ (OS_AUTH_URL, OS_APPLICATION_CREDENTIAL_ID/SECRET)           │   │
+│  ���──────────────────────────────────────────────────────────────┘   │
+└────────────────────────────────┬────────────────────────────────────┘
+                                 │ lecture (ephemeral)
+                                 ▼
+┌────────────────────────────────────────────────────────────────────┐
+│                     Terraform (ce repo)                            │
+│                                                                    │
+│  main.tf ──► module "stormshield_cluster" (for_each = firewalls)   │
+│               └── modules/security/                                │
+│                    ├── tls_private_key (RSA 4096)                  │
+│                    ├── openstack_compute_keypair_v2                 │
+│                    ├── data openstack_networking_network_v2         │
+│                    ├── openstack_networking_port_v2 (multi-NIC)    │
+│                    └── openstack_compute_instance_v2 (Stormshield) │
+└────────────────────────────────┬───────────────────────────────────┘
+                                 │
+                                 ▼
+┌────────────────────────────────────────────────────────────────────┐
+│                     OVH Public Cloud / OpenStack                   │
+│                                                                    │
+│  ┌──────────────┐  ┌──────────────────┐  ┌─────────────────────┐  │
+│  │ Stormshield  │  │ Stormshield      │  │ Ports réseau        │  │
+│  │ fwfe01       │  │ fwfe02 (slave)   │  │ (multi-interface)   │  │
+│  │ (master)     │  │                  │  │ port_security=false │  │
+│  └──────┬───────┘  └──────┬───────────┘  └─────────────────────┘  │
+│         │                  │                                       │
+│    ┌────▼──────────────────▼────────┐                              │
+│    │         VLANs vRack            │                              │
+│    │  front / admin / dmz / interco │                              │
+│    │  vpn / k8s / infra / app       │                              │
+│    └────────────────────────────────┘                              │
+└────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -61,8 +76,9 @@ Ce dépôt Terraform provisionne et gère l'ensemble des réseaux privés (VLANs
 | Outil | Version | Description |
 |---|---|---|
 | **Terraform** | ≥ 1.10 | Infrastructure as Code (support `ephemeral` resources) |
-| **HashiCorp Vault** | Accès actif | Secrets OVH et OpenStack |
-| **OVH Public Cloud** | Projet actif avec vRack | `service_name` (Project ID) |
+| **HashiCorp Vault** | Accès actif | Credentials OpenStack |
+| **OVH Public Cloud** | Projet actif | Avec vRack et réseaux déjà créés (`terraform-ovh-network`) |
+| **Image Stormshield** | Uploadée dans OpenStack | Image QCOW2 du firewall virtuel |
 
 ### Variables d'environnement requises
 
@@ -76,25 +92,24 @@ export AWS_ACCESS_KEY_ID="<s3_access_key>"
 export AWS_SECRET_ACCESS_KEY="<s3_secret_key>"
 ```
 
-> ⚠️ Les credentials OVH et OpenStack sont lus depuis **Vault** via des `ephemeral` resources (pas de variables d'environnement).
+> ⚠️ Les credentials OpenStack sont lus depuis **Vault** via des `ephemeral` resources. Aucune variable d'environnement OpenStack n'est nécessaire.
 
 ---
 
 ## 🗂️ Arborescence du projet
 
 ```
-terraform-ovh-network/
-├── main.tf                          # Point d'entrée : providers + appel module network
+terraform-ovh-security/
+├── main.tf                          # Providers, appel module stormshield_cluster, outputs
 ├── backend.tf                       # Configuration backend S3 distant (tfstate)
-├── variables.tf                     # Variables racine (service_name, region, vlans)
-├── network.tfvars                   # Valeurs des variables : définition de tous les VLANs
-├── .terraform.lock.hcl              # Verrouillage des versions des providers
+├── variables.tf                     # Variables racine (region, firewalls)
+├── security.tfvars                  # Définition des firewalls et de leurs interfaces réseau
 ├── .gitignore                       # Exclusion .terraform/, *.tfstate*, *.pem
 ├── modules/
-│   └── network/
-│       ├── main.tf                  # Ressources : VLANs OVH + Subnets OpenStack
-│       ├── variables.tf             # Variables du module
-│       └── outputs.tf               # Outputs : UUIDs réseau, subnet IDs, VLAN IDs
+│   └── security/
+│       ├── main.tf                  # Ressources : clé SSH, keypair, ports, instance
+│       ├── variables.tf             # Variables du module (name, flavor, image, networks, tags)
+│       └── output.tf                # Outputs : private_key_pem, instance_id
 └── README.md
 ```
 
@@ -102,22 +117,22 @@ terraform-ovh-network/
 
 ## 🌿 Branches et environnements
 
-| Branche | Environnement | Vault Mount | Région OVH | Adressage | Bucket tfstate |
+| Branche | Environnement | Vault Mount | Région OVH | Firewalls | Bucket tfstate |
 |---|---|---|---|---|---|
-| `amont` | Pré-production | `iacrunner-amont` | `SBG5` (Strasbourg) | `10.12.x.x` / `10.14.x.x` | `infra-amont-sto-object-tf01` |
-| `prod` | Production | `iacrunner-prod` | `RBX-A` (Roubaix) | `10.11.x.x` / `10.13.x.x` | `infra-prod-sto-object-tf01` |
+| `amont` | Pré-production | `iacrunner-amont` | `SBG5` | 1 FW (master) | `infra-amont-sto-object-tf01` |
+| `prod` | Production | `iacrunner-prod` | `RBX-A` | 2 FW (master + slave HA) | `infra-prod-sto-object-tf01` |
 | `main` | — | — | — | — | Branche par défaut (documentation) |
 
 ### Différences clés entre branches
 
 | Paramètre | `amont` | `prod` |
 |---|---|---|
-| `service_name` | `a5a3658023e146e78a22afd04601b813` | `2b264defd5244f52b8edbd6c9239a325` |
 | `region` | `SBG5` | `RBX-A` |
-| Préfixe VLAN | `preprod-amont-*` | `prod-production-*` |
-| VLAN IDs infra | 210–290 | 110–190 |
-| VLAN IDs app | 400–402 | 300–302 |
-| Backend S3 endpoint | `s3.sbg.io.cloud.ovh.net` | `s3.rbx.io.cloud.ovh.net` |
+| Nombre de firewalls | 1 (`fwfe01` master) | 2 (`fwfe01` master + `fwfe02` slave) |
+| Réseau HA | Non | Oui (`fwfe-ha` VLAN 121) |
+| Réseau public | `10.12.0.0/24` (front privé) | `5.135.49.0/25` (IP publiques) |
+| Préfixe nommage | `infra-amont-*` | `infra-prod-*` |
+| Préfixe réseaux | `preprod-amont-*` | `prod-production-*` |
 
 ---
 
@@ -125,96 +140,65 @@ terraform-ovh-network/
 
 | Provider | Source | Version | Usage |
 |---|---|---|---|
-| **ovh** | `ovh/ovh` | `>= 2.11.0` | Création des réseaux privés vRack (VLANs) |
-| **openstack** | `terraform-provider-openstack/openstack` | `>= 1.53.0` | Création des subnets associés aux VLANs |
-| **vault** | `hashicorp/vault` | `>= 3.25.0` | Lecture des secrets OVH et OpenStack (ephemeral) |
-
-### Authentification Vault (ephemeral resources)
-
-Ce repo utilise les **ephemeral resources** Vault (Terraform ≥ 1.10) pour injecter les secrets sans les stocker dans le state :
-
-```hcl
-ephemeral "vault_kv_secret_v2" "ovh" {
-  mount = "iacrunner-amont"    # ou iacrunner-prod
-  name  = "ovh_key"
-}
-
-ephemeral "vault_kv_secret_v2" "os" {
-  mount = "iacrunner-amont"    # ou iacrunner-prod
-  name  = "openstack_key"
-}
-```
+| **openstack** | `terraform-provider-openstack/openstack` | `>= 1.53.0` | Instances, ports, keypairs, réseaux |
+| **vault** | `hashicorp/vault` | `>= 3.25.0` | Lecture des credentials OpenStack (ephemeral) |
+| **ovh** | `ovh/ovh` | `>= 0.40.0` | Déclaré pour compatibilité |
+| **tls** | `hashicorp/tls` | latest | Génération dynamique des clés SSH RSA 4096 |
 
 ---
 
-## 📦 Module network
+## 📦 Module security
 
-### `modules/network/`
+### `modules/security/`
 
-Module unique qui crée l'ensemble de l'infrastructure réseau à partir d'une map de VLANs.
+Module qui provisionne une instance firewall Stormshield complète avec toutes ses interfaces réseau.
 
-#### Ressources créées (par VLAN)
+#### Ressources créées (par firewall)
 
 | # | Ressource | Type | Description |
 |---|---|---|---|
-| 1 | `ovh_cloud_project_network_private.vlan` | Réseau OVH | Réseau privé vRack avec VLAN ID et région |
-| 2 | `openstack_networking_subnet_v2.subnet` | Subnet OpenStack | Sous-réseau avec CIDR, pool DHCP, gateway |
+| 1 | `tls_private_key.instance_key` | Clé SSH | Génération RSA 4096 bits (dynamique, pas de fichier PEM sur disque) |
+| 2 | `openstack_compute_keypair_v2.instance_kp` | Keypair OpenStack | Enregistrement de la clé publique dans OpenStack |
+| 3 | `openstack_networking_network_v2.networks` | Data source | Résolution des réseaux par nom → UUID OpenStack |
+| 4 | `openstack_networking_port_v2.ports` | Port réseau | Création d'un port par interface avec IP fixe et `port_security_enabled = false` |
+| 5 | `openstack_compute_instance_v2.fw` | Instance | VM Stormshield avec injection dynamique des ports réseau |
 
-Les ressources utilisent `for_each` sur la map `var.vlans` pour créer dynamiquement tous les réseaux.
+#### Points techniques importants
 
-#### Logique dynamique Gateway / DHCP
-
-Le module gère automatiquement 3 scénarios :
-
-| Scénario | `gateway_ip` | `enable_dhcp` | Comportement |
-|---|---|---|---|
-| Réseau avec gateway + DHCP | `"10.11.90.254"` | `true` | Gateway définie, DHCP activé, DNS OVH configurés |
-| Réseau sans gateway, sans DHCP | `null` (défaut) | `false` (défaut) | `no_gateway = true`, pas de DHCP, pas de DNS |
-| Réseau avec gateway, sans DHCP | `"10.11.52.254"` | `true` | Gateway définie, DHCP activé, DNS OVH |
-
-```hcl
-# Gateway dynamique
-gateway_ip = each.value.gateway_ip != null ? each.value.gateway_ip : null
-no_gateway = each.value.gateway_ip == null ? true : null
-
-# DHCP dynamique
-enable_dhcp     = each.value.enable_dhcp
-dns_nameservers = each.value.enable_dhcp ? ["213.186.33.99", "8.8.8.8"] : []
-```
+- **`port_security_enabled = false`** : Obligatoire pour Stormshield — le firewall doit pouvoir router/NAT du trafic avec des IP sources différentes de l'IP du port
+- **Clé SSH dynamique** : Chaque firewall reçoit sa propre clé RSA 4096 générée par Terraform (pas de clé partagée)
+- **Multi-NIC** : Les interfaces réseau sont injectées via un bloc `dynamic "network"` qui itère sur les ports créés
+- **Filtrage `enabled`** : Seuls les réseaux avec `enabled = true` sont attachés — permet de désactiver une interface sans la supprimer
 
 #### Variables du module
 
 | Variable | Type | Description |
 |---|---|---|
-| `service_name` | `string` | ID du projet Public Cloud OVH |
+| `name` | `string` | Nom de l'instance firewall |
+| `flavor` | `string` | UUID du flavor OpenStack (taille de la VM) |
+| `image` | `string` | UUID de l'image Stormshield (QCOW2) |
 | `region` | `string` | Région OVH (SBG5, RBX-A) |
-| `vlans` | `map(object)` | Map de tous les VLANs à créer (voir structure ci-dessous) |
+| `networks` | `list(object)` | Liste des interfaces réseau (voir structure ci-dessous) |
+| `tags` | `map(string)` | Métadonnées de l'instance (Owner, Env, Role) |
 
-#### Structure d'un VLAN
+#### Structure d'une interface réseau
 
 ```hcl
-variable "vlans" {
-  type = map(object({
-    vlan_id     = number              # ID du VLAN dans le vRack (0 = public)
-    name        = string              # Nom descriptif du réseau
-    cidr        = string              # Plage CIDR du subnet
-    start       = string              # Début du pool d'allocation
-    end         = string              # Fin du pool d'allocation
-    enable_dhcp = optional(bool, false)   # Activer le DHCP (défaut: false)
-    gateway_ip  = optional(string, null)  # IP de la gateway (défaut: null = pas de gateway)
-  }))
-}
+networks = [
+  {
+    name    = "prod-production-dmz-exposed-10.11.30.0-24"  # Nom du réseau OpenStack
+    ip      = "10.11.30.251"                                # IP fixe du firewall
+    enabled = true                                          # Interface active
+  }
+]
 ```
 
-#### Outputs
+#### Outputs du module
 
-| Output | Type | Description |
+| Output | Sensible | Description |
 |---|---|---|
-| `network_uuids` | `map(string)` | UUID OpenStack de chaque réseau (clé = nom du VLAN) |
-| `subnet_ids` | `map(string)` | ID OpenStack de chaque subnet |
-| `ovh_vlan_ids` | `map(string)` | ID OVH de chaque VLAN |
-
-Ces outputs sont utilisés par les autres projets Terraform (ex: `terraform-ovh-infra`) pour attacher les VMs aux bons réseaux.
+| `private_key_pem` | **Oui** | Clé privée SSH RSA du firewall (format PEM) |
+| `instance_id` | Non | UUID OpenStack de l'instance |
 
 ---
 
@@ -224,67 +208,81 @@ Ces outputs sont utilisés par les autres projets Terraform (ex: `terraform-ovh-
 
 | Variable | Type | Description |
 |---|---|---|
-| `service_name` | `string` | ID du projet Public Cloud OVH |
-| `region` | `string` | Région OVH |
-| `vlans` | `map(object)` | Définition de tous les réseaux |
+| `region` | `string` | Région OVH Public Cloud |
+| `firewalls` | `map(object)` | Map des firewalls à déployer |
+
+### Structure d'un firewall
+
+```hcl
+variable "firewalls" {
+  type = map(object({
+    name     = string                # Nom de l'instance
+    flavor   = string                # UUID du flavor
+    image    = string                # UUID de l'image Stormshield
+    networks = list(object({         # Interfaces réseau
+      name    = string
+      ip      = string
+      enabled = bool
+    }))
+    tags = map(string)               # Métadonnées (Owner, Env, Role)
+  }))
+}
+```
 
 ---
 
-## 🗺️ Plan d'adressage
+## 🔥 Inventaire des firewalls
 
-### Environnement Production (`prod` — `RBX-A`)
+### Production (`prod` — `RBX-A`) : Cluster HA Master/Slave
 
-| Clé | VLAN ID | Nom | CIDR | Gateway | DHCP | Usage |
-|---|---|---|---|---|---|---|
-| `fw_front` | 0 | prod-production-fw-front | `5.135.49.0/25` | — | Non | Interface publique firewall |
-| `vrack_vpn` | 110 | prod-production-vrack-vpn | `10.11.10.0/24` | — | Non | VPN vRack |
-| `fwfe_admin` | 120 | prod-production-fwfe-admin | `10.11.20.0/24` | — | Non | Administration firewall front-end |
-| `fwfe_ha` | 121 | prod-production-fwfe-ha | `172.16.21.32/28` | — | Non | HA firewall front-end |
-| `dmz_exposed` | 130 | prod-production-dmz-exposed | `10.11.30.0/24` | — | Non | DMZ exposée (proxy SSH) |
-| `fw_interco` | 140 | prod-production-fw-interco | `172.16.21.16/28` | — | Non | Interconnexion firewalls |
-| `fwbe_admin` | 150 | prod-production-fwbe-admin | `10.11.50.0/24` | — | Non | Administration firewall back-end |
-| `infra_admin` | 151 | prod-production-infra-admin | `10.11.51.0/24` | — | Non | Administration infrastructure |
-| `dmz_admin` | 152 | prod-production-dmz-admin | `10.11.52.0/24` | `10.11.52.254` | **Oui** | DMZ administration |
-| `k8s_front` | 160 | prod-production-k8s-front | `10.11.60.0/24` | — | Non | Kubernetes front |
-| `k8s_back` | 161 | prod-production-k8s-back | `10.11.61.0/24` | — | Non | Kubernetes back |
-| `dmz_transit` | 170 | prod-production-dmz-transit | `10.11.70.0/24` | — | Non | DMZ transit (proxy Squid) |
-| `infra_app` | 190 | prod-production-infra-app | `10.11.90.0/24` | `10.11.90.254` | **Oui** | Applications infrastructure (IPA, Repo, Ansible) |
-| `app_front` | 300 | prod-production-app-front | `10.13.0.0/24` | — | Non | Applications front |
-| `app_middle` | 301 | prod-production-app-middle | `10.13.1.0/24` | — | Non | Applications middle |
-| `app_back` | 302 | prod-production-app-back | `10.13.2.0/24` | — | Non | Applications back |
+#### fwfe01 — Master
 
-### Environnement Pré-production (`amont` — `SBG5`)
+| Interface | Réseau | VLAN | IP | Usage |
+|---|---|---|---|---|
+| eth0 | app-front | 300 | `10.13.0.251` | Front applicatif |
+| eth1 | k8s-front | 160 | `10.11.60.251` | Kubernetes front |
+| eth2 | dmz-transit | 170 | `10.11.70.251` | Transit DMZ (proxy Squid) |
+| eth3 | dmz-exposed | 130 | `10.11.30.251` | DMZ exposée (SSH proxy) |
+| eth4 | vrack-vpn | 110 | `10.11.10.251` | VPN vRack |
+| eth5 | fw-interco | 140 | `172.16.21.29` | Interconnexion firewalls |
+| eth6 | fwfe-ha | 121 | `172.16.21.45` | Haute disponibilité |
+| eth7 | fwfe-admin | 120 | `10.11.20.251` | Administration firewall |
+| eth8 | fw-front | 0 | `5.135.49.96` | Interface publique |
 
-| Clé | VLAN ID | Nom | CIDR | Gateway | DHCP | Usage |
-|---|---|---|---|---|---|---|
-| `fwfe_front` | 0 | preprod-amont-fwfe-front | `10.12.0.0/24` | — | Non | Interface front firewall |
-| `vrack_vpn` | 210 | preprod-amont-vrack-vpn | `10.12.10.0/24` | — | Non | VPN vRack |
-| `fwfe_admin` | 220 | preprod-amont-fwfe-admin | `10.12.20.0/24` | — | Non | Administration firewall front-end |
-| `dmz_exposed` | 230 | preprod-amont-dmz-exposed | `10.12.30.0/24` | `10.12.30.254` | **Oui** | DMZ exposée |
-| `fw_interco` | 240 | preprod-amont-fw-interco | `172.16.31.16/28` | — | Non | Interconnexion firewalls |
-| `fwbe_admin` | 250 | preprod-amont-fwbe-admin | `10.12.50.0/24` | — | Non | Administration firewall back-end |
-| `infra_admin` | 251 | preprod-amont-infra-admin | `10.12.51.0/24` | — | Non | Administration infrastructure |
-| `dmz_admin` | 252 | preprod-amont-dmz-admin | `10.12.52.0/24` | `10.12.52.253` | **Oui** | DMZ administration |
-| `k8s_front` | 260 | preprod-amont-k8s-front | `10.12.60.0/24` | — | Non | Kubernetes front |
-| `k8s_back` | 261 | preprod-amont-k8s-back | `10.12.61.0/24` | — | Non | Kubernetes back |
-| `dmz_transit` | 270 | preprod-amont-dmz-transit | `10.12.70.0/24` | `10.12.70.253` | **Oui** | DMZ transit |
-| `fwbe_occ` | 280 | preprod-amont-fwbe-occ | `172.16.31.0/28` | — | Non | Firewall back-end OCC |
-| `infra_app` | 290 | preprod-amont-infra-app | `10.12.90.0/24` | `10.12.90.253` | **Oui** | Applications infrastructure |
-| `app_front` | 400 | preprod-amont-app-front | `10.14.0.0/24` | — | Non | Applications front |
-| `app_middle` | 401 | preprod-amont-app-middle | `10.14.1.0/24` | — | Non | Applications middle |
-| `app_back` | 402 | preprod-amont-app-back | `10.14.2.0/24` | — | Non | Applications back |
+**Tags** : `Owner=infra-team`, `Env=prod`, `Role=master`
 
-### Convention d'adressage
+#### fwfe02 — Slave
 
-| Plage | Environnement | Usage |
-|---|---|---|
-| `10.11.x.x` | Production | Infrastructure + DMZ |
-| `10.13.x.x` | Production | Applications |
-| `10.12.x.x` | Pré-production | Infrastructure + DMZ |
-| `10.14.x.x` | Pré-production | Applications |
-| `172.16.21.x` | Production | Interconnexion firewalls / HA |
-| `172.16.31.x` | Pré-production | Interconnexion firewalls / OCC |
-| `5.135.49.x` | Production | IP publiques (front firewall) |
+| Interface | Réseau | VLAN | IP | Usage |
+|---|---|---|---|---|
+| eth0 | app-front | 300 | `10.13.0.252` | Front applicatif |
+| eth1 | k8s-front | 160 | `10.11.60.252` | Kubernetes front |
+| eth2 | dmz-transit | 170 | `10.11.70.252` | Transit DMZ |
+| eth3 | dmz-exposed | 130 | `10.11.30.252` | DMZ exposée |
+| eth4 | vrack-vpn | 110 | `10.11.10.252` | VPN vRack |
+| eth5 | fw-interco | 140 | `172.16.21.28` | Interconnexion firewalls |
+| eth6 | fwfe-ha | 121 | `172.16.21.44` | Haute disponibilité |
+| eth7 | fwfe-admin | 120 | `10.11.20.252` | Administration firewall |
+| eth8 | fw-front | 0 | `5.135.49.97` | Interface publique |
+
+**Tags** : `Owner=infra-team`, `Env=prod`, `Role=slave`
+
+### Pré-production (`amont` — `SBG5`) : Instance unique
+
+#### fwfe01 — Master
+
+| Interface | Réseau | VLAN | IP | Usage |
+|---|---|---|---|---|
+| eth0 | fwfe-front | 0 | `10.12.0.251` | Front firewall |
+| eth1 | fwfe-admin | 220 | `10.12.20.251` | Administration |
+| eth2 | dmz-exposed | 230 | `10.12.30.251` | DMZ exposée |
+| eth3 | dmz-transit | 270 | `10.12.70.251` | Transit DMZ |
+| eth4 | infra-app | 290 | `10.12.90.251` | Infrastructure applicative |
+| eth5 | k8s-front | 260 | `10.12.60.251` | Kubernetes front |
+| eth6 | vrack-vpn | 210 | `10.12.10.251` | VPN vRack |
+| eth7 | fw-interco | 240 | `172.16.31.29` | Interconnexion firewalls |
+
+**Tags** : `Owner=infra-team`, `Env=amont`, `Role=master`
 
 ---
 
@@ -296,7 +294,7 @@ Ces outputs sont utilisés par les autres projets Terraform (ex: `terraform-ovh-
 terraform {
   backend "s3" {
     bucket = "infra-amont-sto-object-tf01"
-    key    = "infra-amont-network.tfstate"
+    key    = "infra-amont-security.tfstate"
     region = "sbg"
     endpoints = { s3 = "https://s3.sbg.io.cloud.ovh.net/" }
   }
@@ -309,7 +307,7 @@ terraform {
 terraform {
   backend "s3" {
     bucket = "infra-prod-sto-object-tf01"
-    key    = "infra-production-network.tfstate"
+    key    = "infra-production-security.tfstate"
     region = "rbx"
     endpoints = { s3 = "https://s3.rbx.io.cloud.ovh.net/" }
   }
@@ -323,7 +321,7 @@ terraform {
 ### Déploiement standard
 
 ```bash
-# 1. Se positionner sur la branche de l'environnement cible
+# 1. Se positionner sur la branche de l'environnement
 git checkout amont   # ou prod
 
 # 2. Configurer les variables d'environnement
@@ -335,38 +333,36 @@ export AWS_SECRET_ACCESS_KEY="<s3_secret_key>"
 terraform init
 
 # 4. Planifier les changements
-terraform plan -var-file="network.tfvars"
+terraform plan -var-file="security.tfvars"
 
 # 5. Appliquer les changements
-terraform apply -var-file="network.tfvars"
+terraform apply -var-file="security.tfvars"
 ```
 
-### Cibler un VLAN spécifique
+### Cibler un firewall spécifique
 
 ```bash
-# Planifier uniquement le VLAN infra_app
-terraform plan -var-file="network.tfvars" \
-  -target='module.network.ovh_cloud_project_network_private.vlan["infra_app"]' \
-  -target='module.network.openstack_networking_subnet_v2.subnet["infra_app"]'
+# Planifier uniquement le firewall master
+terraform plan -var-file="security.tfvars" \
+  -target='module.stormshield_cluster["fwfe01"]'
 
-# Appliquer uniquement le VLAN dmz_transit
-terraform apply -var-file="network.tfvars" \
-  -target='module.network.ovh_cloud_project_network_private.vlan["dmz_transit"]' \
-  -target='module.network.openstack_networking_subnet_v2.subnet["dmz_transit"]'
+# Appliquer uniquement le firewall slave
+terraform apply -var-file="security.tfvars" \
+  -target='module.stormshield_cluster["fwfe02"]'
 ```
 
 ### Destruction
 
 ```bash
-# Détruire un VLAN spécifique
-terraform destroy -var-file="network.tfvars" \
-  -target='module.network.ovh_cloud_project_network_private.vlan["app_front"]'
+# Détruire un firewall spécifique
+terraform destroy -var-file="security.tfvars" \
+  -target='module.stormshield_cluster["fwfe02"]'
 
-# Détruire tout (⚠️ DANGER — coupe tout le réseau)
-terraform destroy -var-file="network.tfvars"
+# Détruire tout (⚠️ DANGER — coupe le réseau)
+terraform destroy -var-file="security.tfvars"
 ```
 
-> ⚠️ **ATTENTION** : La destruction des réseaux déconnectera toutes les VMs attachées. Ne jamais faire de `destroy` global en production.
+> ⚠️ **ATTENTION** : La destruction d'un firewall en production coupe tout le routage inter-VLAN et l'accès Internet. Toujours tester sur `amont` avant.
 
 ---
 
@@ -376,52 +372,46 @@ terraform destroy -var-file="network.tfvars"
 # Valider la syntaxe
 terraform validate
 
-# Formater le code (vérification)
+# Formater le code
 terraform fmt -check -recursive
-
-# Formater le code (correction)
 terraform fmt -recursive
 
 # Lister les ressources dans le state
 terraform state list
 
-# Afficher un VLAN spécifique dans le state
-terraform state show 'module.network.ovh_cloud_project_network_private.vlan["infra_app"]'
-terraform state show 'module.network.openstack_networking_subnet_v2.subnet["infra_app"]'
+# Afficher le détail d'un firewall
+terraform state show 'module.stormshield_cluster["fwfe01"].openstack_compute_instance_v2.fw'
 
-# Afficher les outputs (UUIDs réseau)
+# Afficher les ports réseau d'un firewall
+terraform state list | grep 'fwfe01.*port'
+
+# Afficher les outputs
 terraform output
-terraform output -json
-
-# Afficher les UUIDs réseau
-terraform output -json | jq '.network_uuids'
+terraform output fw_instance_ids
 
 # Planifier en mode détaillé
-terraform plan -var-file="network.tfvars" -detailed-exitcode
+terraform plan -var-file="security.tfvars" -detailed-exitcode
 # Exit code 0 = pas de changement
 # Exit code 2 = changements détectés
 
-# Rafraîchir le state
-terraform refresh -var-file="network.tfvars"
-
 # Graphe de dépendances
-terraform graph | dot -Tpng > network-graph.png
+terraform graph | dot -Tpng > security-graph.png
 ```
 
-### Vérification côté OVH / OpenStack
+### Vérification côté OpenStack
 
 ```bash
-# Lister les réseaux via OpenStack CLI
-openstack network list
+# Lister les instances
+openstack server list
 
-# Lister les subnets
-openstack subnet list
+# Détail d'un firewall
+openstack server show infra-prod-fwfe01
 
-# Détail d'un subnet
-openstack subnet show <subnet_id>
+# Lister les ports d'un firewall
+openstack port list --server infra-prod-fwfe01
 
-# Vérifier depuis une VM
-ssh almalinux@<ip> "ip addr show && ip route show"
+# Vérifier les interfaces réseau
+openstack server show infra-prod-fwfe01 -f json | jq '.addresses'
 ```
 
 ---
@@ -432,65 +422,90 @@ ssh almalinux@<ip> "ip addr show && ip route show"
 
 | Chemin Vault | Clés | Provenance |
 |---|---|---|
-| `iacrunner-*/ovh_key` | `OVH_APPLICATION_KEY`, `OVH_APPLICATION_SECRET`, `OVH_CONSUMER_KEY` | Créé par `terraform-ovh-storage` ou manuellement |
 | `iacrunner-*/openstack_key` | `OS_AUTH_URL`, `OS_APPLICATION_CREDENTIAL_ID`, `OS_APPLICATION_CREDENTIAL_SECRET` | Créé par `terraform-ovh-storage` |
+
+> **Note** : Ce repo n'utilise **pas** les credentials OVH API (`ovh_key`). Seul le provider OpenStack est utilisé pour créer les instances.
 
 ### Vérification Vault
 
 ```bash
-# Vérifier les credentials OVH
-vault kv get iacrunner-amont/ovh_key
-
-# Vérifier les credentials OpenStack
 vault kv get iacrunner-amont/openstack_key
+vault kv get iacrunner-prod/openstack_key
 ```
 
 ---
 
-## ➕ Ajouter / modifier un VLAN
+## 🔑 Récupérer la clé SSH d'un firewall
 
-### Ajouter un nouveau VLAN
+Les clés SSH sont générées dynamiquement par Terraform et stockées dans le state (marquées `sensitive`).
 
-1. Éditer `network.tfvars` et ajouter une entrée dans la map `vlans` :
+```bash
+# Afficher la clé privée du firewall master
+terraform output -raw fw_private_keys | jq -r '.fwfe01'
+
+# Sauvegarder dans un fichier
+terraform output -json fw_private_keys | jq -r '.fwfe01' > fwfe01.pem
+chmod 600 fwfe01.pem
+
+# Se connecter au firewall (via le réseau admin)
+ssh -i fwfe01.pem admin@10.11.20.251
+```
+
+> ⚠️ Ne jamais commiter les fichiers `.pem`. Ils sont exclus par le `.gitignore`.
+
+---
+
+## ➕ Ajouter / modifier un firewall
+
+### Ajouter un nouveau firewall
+
+1. Éditer `security.tfvars` et ajouter une entrée dans la map `firewalls` :
 
 ```hcl
-vlans = {
-  # ... VLANs existants ...
+firewalls = {
+  # ... firewalls existants ...
 
-  "mon_nouveau_vlan" = {
-    vlan_id     = 500
-    name        = "prod-production-mon-vlan-10.15.0.0-24"
-    cidr        = "10.15.0.0/24"
-    start       = "10.15.0.51"
-    end         = "10.15.0.100"
-    enable_dhcp = true           # Optionnel, défaut: false
-    gateway_ip  = "10.15.0.254"  # Optionnel, défaut: null (pas de gateway)
+  "fwbe01" = {
+    name   = "infra-prod-fwbe01"
+    flavor = "58a6c33c-8c3d-4a94-8d03-2153139832b8"   # UUID du flavor
+    image  = "042e000e-55b0-4c3c-8398-60d853d886f5"   # UUID image Stormshield
+
+    networks = [
+      { name = "prod-production-fwbe-admin-10.11.50.0-24",   ip = "10.11.50.251", enabled = true },
+      { name = "prod-production-fw-interco-172.16.21.16-28", ip = "172.16.21.27", enabled = true },
+      { name = "prod-production-infra-app-10.11.90.0-24",    ip = "10.11.90.251", enabled = true },
+    ]
+
+    tags = { Owner = "infra-team", Env = "prod", Role = "backend-fw" }
   }
 }
 ```
 
 2. Planifier et vérifier :
 ```bash
-terraform plan -var-file="network.tfvars"
+terraform plan -var-file="security.tfvars"
 ```
 
 3. Appliquer :
 ```bash
-terraform apply -var-file="network.tfvars"
+terraform apply -var-file="security.tfvars"
 ```
 
-### Modifier un VLAN existant
+### Ajouter une interface réseau à un firewall existant
 
-Modifier les valeurs dans `network.tfvars`. Attention :
-- **Changer le `vlan_id`** → force la re-création du réseau (destructif !)
-- **Changer le `cidr`** → force la re-création du subnet (destructif !)
-- **Changer `enable_dhcp` ou `gateway_ip`** → update in-place (non destructif)
+Ajouter une entrée dans la liste `networks` du firewall concerné :
 
-### Supprimer un VLAN
+```hcl
+{ name = "prod-production-app-back-10.13.2.0-24", ip = "10.13.2.251", enabled = true },
+```
 
-1. Retirer l'entrée de la map `vlans` dans `network.tfvars`
-2. `terraform plan` pour vérifier ce qui sera détruit
-3. `terraform apply` pour supprimer
+### Désactiver une interface sans la supprimer
+
+Passer `enabled = false` :
+
+```hcl
+{ name = "prod-production-vrack-vpn-10.11.10.0-24", ip = "10.11.10.251", enabled = false },
+```
 
 ---
 
@@ -500,30 +515,35 @@ Modifier les valeurs dans `network.tfvars`. Attention :
 
 | Problème | Cause probable | Solution |
 |---|---|---|
-| `Error: ephemeral "vault_kv_secret_v2" not supported` | Terraform < 1.10 | Mettre à jour Terraform vers ≥ 1.10 |
-| `Error: Failed to get existing workspaces` | Backend S3 inaccessible | Vérifier `AWS_ACCESS_KEY_ID`/`SECRET` et l'endpoint |
-| `Error: Conflict - no_gateway and gateway_ip` | Bug logique gateway | Vérifier que `gateway_ip` est bien `null` ou une IP valide |
-| `Error: VLAN ID already in use` | VLAN déjà créé manuellement sur OVH | Importer : `terraform import 'module.network.ovh_cloud_project_network_private.vlan["key"]' <id>` |
-| `Error: 409 Conflict subnet overlap` | CIDR en conflit avec un subnet existant | Vérifier le plan d'adressage, supprimer le subnet en doublon |
-| VMs ne voient pas le réseau | VLAN pas attaché à la VM | Vérifier dans `terraform-ovh-infra` que le bon `network_uuid` est utilisé |
-| Pas de connectivité inter-VLAN | Routage manquant | Configurer le routage sur les firewalls (hors scope Terraform) |
+| `Error: ephemeral resource not supported` | Terraform < 1.10 | Mettre à jour Terraform ≥ 1.10 |
+| `Error: 409 Multiple possible networks found` | Ports non injectés correctement | Vérifier que tous les `networks` ont `enabled = true` |
+| `Error: No network found with name` | Réseau pas encore créé | Déployer d'abord `terraform-ovh-network` |
+| `Error: Unable to create port` | IP déjà utilisée par un autre port | Vérifier les IPs dans `security.tfvars` |
+| `Error: port_security_enabled conflict` | Conflit security group / port | S'assurer que `port_security_enabled = false` est bien défini |
+| `Error: Quota exceeded` | Plus assez de ressources OVH | Augmenter les quotas dans le Manager OVH |
+| Clé SSH perdue | State détruit ou corrompu | Re-créer le firewall (la clé sera régénérée) |
 
 ### Commandes de diagnostic
 
 ```bash
 # Debug complet
-TF_LOG=DEBUG terraform plan -var-file="network.tfvars" 2>&1 | tee debug.log
+TF_LOG=DEBUG terraform plan -var-file="security.tfvars" 2>&1 | tee debug.log
 
 # Vérifier le state
 terraform state pull | jq '.resources[] | .type + "." + .name'
 
-# Importer une ressource existante
+# Importer une instance existante
 terraform import \
-  'module.network.ovh_cloud_project_network_private.vlan["infra_app"]' \
-  <service_name>/<network_id>
+  'module.stormshield_cluster["fwfe01"].openstack_compute_instance_v2.fw' \
+  <instance_uuid>
 
-# Supprimer une ressource du state (sans détruire)
-terraform state rm 'module.network.ovh_cloud_project_network_private.vlan["old_vlan"]'
+# Importer un port existant
+terraform import \
+  'module.stormshield_cluster["fwfe01"].openstack_networking_port_v2.ports["prod-production-dmz-exposed-10.11.30.0-24"]' \
+  <port_uuid>
+
+# Taint pour forcer la re-création
+terraform taint 'module.stormshield_cluster["fwfe01"].openstack_compute_instance_v2.fw'
 ```
 
 ---
@@ -537,7 +557,7 @@ terraform state rm 'module.network.ovh_cloud_project_network_private.vlan["old_v
    ```
 2. Créer une branche feature si nécessaire :
    ```bash
-   git checkout -b feature/ajout-vlan-monitoring amont
+   git checkout -b feature/ajout-fwbe amont
    ```
 3. Valider avec `terraform validate` et `terraform fmt`
 4. Planifier avec `terraform plan` pour vérifier l'impact
@@ -545,19 +565,30 @@ terraform state rm 'module.network.ovh_cloud_project_network_private.vlan["old_v
 
 ### Conventions
 
-- **Nommage des VLANs** : `<env>-<projet>-<zone>-<cidr>` (ex: `prod-production-infra-app-10.11.90.0-24`)
-- **Clés de map** : snake_case descriptif (ex: `infra_app`, `dmz_transit`, `k8s_front`)
-- **VLAN IDs** : Production `1xx`-`3xx`, Pré-prod `2xx`-`4xx`
-- **Branche par défaut** : `main` (documentation), `amont` (preprod), `prod` (production)
+- **Nommage des firewalls** : `infra-<env>-fw<zone><num>` (ex: `infra-prod-fwfe01`)
+- **IPs firewall** : `.251` (master), `.252` (slave), `.253` (VIP HA)
+- **Clés de map** : `fw<zone><num>` (ex: `fwfe01`, `fwbe01`)
+- **Tags obligatoires** : `Owner`, `Env`, `Role`
 
 ---
 
-## 🔗 Projets liés
+## 🔗 Dépendances et projets liés
 
-| Repo | Description |
-|---|---|
-| [`terraform-ovh-storage`](https://github.com/ansforge/terraform-ovh-storage) | Gestion du stockage S3 OVH et credentials Vault |
-| [`ansible-ovh`](https://github.com/ansforge/ansible-ovh) | Provisionnement et configuration des VMs via Ansible |
+| Repo | Relation | Description |
+|---|---|---|
+| [`terraform-ovh-network`](https://github.com/ansforge/terraform-ovh-network) | **Pré-requis** | Les VLANs/subnets doivent exister avant de déployer les firewalls |
+| [`terraform-ovh-storage`](https://github.com/ansforge/terraform-ovh-storage) | **Pré-requis** | Crée les credentials OpenStack utilisés par ce repo |
+| [`ansible-ovh`](https://github.com/ansforge/ansible-ovh) | **Post-déploiement** | Configuration des VMs derrière les firewalls |
+
+### Ordre de déploiement global
+
+```
+1. terraform-ovh-storage   → Credentials + bucket tfstate
+2. terraform-ovh-network   → VLANs et subnets vRack
+3. terraform-ovh-security  → Firewalls Stormshield    ← CE REPO
+4. terraform-ovh-infra     → VMs (serveurs Linux)
+5. ansible-ovh             → Configuration des VMs
+```
 
 ---
 
@@ -567,4 +598,4 @@ terraform state rm 'module.network.ovh_cloud_project_network_private.vlan["old_v
 
 ---
 
-> **Maintenu par l'équipe Infrastructure ANS Forge** — Gestion réseau OVH vRack avec Terraform + Vault
+> **Maintenu par l'équipe Infrastructure ANS Forge** — Déploiement des firewalls Stormshield sur OVH Cloud avec Terraform + Vault
