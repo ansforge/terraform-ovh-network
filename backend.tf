@@ -1,10 +1,10 @@
 terraform {
   backend "s3" {
-    bucket   = "infra-amont-sto-object-tf01"
-    key      = "infra-amont-network.tfstate"
-    region   = "sbg"
-    endpoints = { 
-      s3 = "https://s3.sbg.io.cloud.ovh.net/" 
+    bucket   = "infra-outils-sto-object-tf01"
+    key      = "infra-outils-network.tfstate"
+    region   = "eu-west-par"
+    endpoints = {
+      s3 = "https://s3.eu-west-par.io.cloud.ovh.net/"
     }
     skip_credentials_validation = true
     skip_region_validation      = true
